@@ -6,6 +6,7 @@ on:
       - '**'
     tags:
       - '[0-9]+.*'
+      - 'jev-v*'
   pull_request:
   workflow_dispatch:
 
@@ -237,3 +238,42 @@ jobs:
             Experimental Weasel build with context-aware TypeSafe Jev intent routing and candidate ranking.
             Configure WEASEL_JEV_ENABLED, TYPESAFE_API_KEY, and WEASEL_JEV_APPS after installation.
             This installer is unsigned and Windows SmartScreen may show a warning.
+
+  release-fork:
+    if: ${{ github.repository == 'k-l-lambda/weasel' && startsWith(github.ref, 'refs/tags/jev-v') }}
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: weasel-artifact-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Weasel Jev ${{ github.ref_name }}
+          prerelease: false
+          make_latest: true
+          files: |
+            artifacts/weasel*.exe
+            artifacts/debug_symbols.7z
+          body: |
+            Weasel (Rime for Windows) with Jev context-aware candidate decisions and a candidate-window status indicator.
+
+            Jev is off by default and the installer contains no endpoint, model or credential. After installing, set these environment variables for the WeaselServer process, then restart it:
+
+            | Variable | Meaning |
+            | --- | --- |
+            | `WEASEL_JEV_ENABLED` | `1` to enable Jev |
+            | `WEASEL_JEV_APPS` | Allowed executables, e.g. `*` or `*, !keepass.exe` (required) |
+            | `TYPESAFE_API_KEY` | Bearer credential for the decision service |
+            | `WEASEL_JEV_ENDPOINT` | Optional HTTPS decision endpoint |
+            | `WEASEL_JEV_MODEL` | Optional model name (default `jev-latest`) |
+
+            See `docs/jev-endpoint-configuration.md` for details. The installer is unsigned, so Windows SmartScreen may show a warning.
