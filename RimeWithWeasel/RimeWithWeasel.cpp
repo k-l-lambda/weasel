@@ -7,6 +7,7 @@
 #include <WeaselUtility.h>
 
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <array>
 #include <cctype>
@@ -104,6 +105,17 @@ void AppendSignaturePart(std::string& signature, const std::string& value) {
   signature.append(std::to_string(value.size())).append(":").append(value);
 }
 
+// Opt-in, content-free diagnostics independent of release logging macros.
+void JevDiagnostic(const std::string& event) {
+  const auto path = GetEnvironmentUtf8(L"WEASEL_JEV_DIAGNOSTIC_LOG");
+  if (path.empty())
+    return;
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> lock(mutex);
+  std::ofstream stream(std::filesystem::u8path(path), std::ios::app);
+  stream << event << std::endl;
+}
+
 bool IsSafeHttpHeaderValue(const std::string& value) {
   return !value.empty() &&
          std::all_of(value.begin(), value.end(),
@@ -138,7 +150,8 @@ std::optional<JevState::Result> AskJev(const std::string& api_key,
 
   boost::property_tree::ptree payload;
   payload.add_child("state", state);
-  payload.put("model", "jev-latest");
+  const std::string configured_model = GetEnvironmentUtf8(L"WEASEL_JEV_MODEL");
+  payload.put("model", configured_model.empty() ? "jev-latest" : configured_model);
   payload.add_child("questions", questions);
   std::ostringstream output;
   boost::property_tree::write_json(output, payload, false);
@@ -147,17 +160,41 @@ std::optional<JevState::Result> AskJev(const std::string& api_key,
   WinHttpHandle session(
       WinHttpOpen(L"Weasel-Jev/0.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-  if (!session || !WinHttpSetTimeouts(session, 200, 200, 800, 800))
+  if (!session || !WinHttpSetTimeouts(session, 1000, 1000, 1500, 2500))
     return std::nullopt;
 
-  WinHttpHandle connection(WinHttpConnect(session, L"api.typesafe.ai",
-                                          INTERNET_DEFAULT_HTTPS_PORT, 0));
+  // Keep upstream defaults, but permit an explicit HTTPS decision endpoint.
+  const std::string configured_endpoint =
+      GetEnvironmentUtf8(L"WEASEL_JEV_ENDPOINT");
+  const std::wstring endpoint = u8tow(configured_endpoint.empty()
+      ? "https://api.typesafe.ai/v1/systemone" : configured_endpoint);
+  URL_COMPONENTS url = {};
+  url.dwStructSize = sizeof(url);
+  url.dwHostNameLength = static_cast<DWORD>(-1);
+  url.dwUrlPathLength = static_cast<DWORD>(-1);
+  url.dwExtraInfoLength = static_cast<DWORD>(-1);
+  url.dwUserNameLength = static_cast<DWORD>(-1);
+  url.dwPasswordLength = static_cast<DWORD>(-1);
+  if (!WinHttpCrackUrl(endpoint.c_str(), 0, 0, &url) ||
+      url.nScheme != INTERNET_SCHEME_HTTPS || !url.dwHostNameLength ||
+      url.dwUserNameLength || url.dwPasswordLength || url.dwExtraInfoLength) {
+    return std::nullopt;
+  }
+  const std::wstring host(url.lpszHostName, url.dwHostNameLength);
+  const std::wstring path = url.dwUrlPathLength
+      ? std::wstring(url.lpszUrlPath, url.dwUrlPathLength) : L"/";
+  WinHttpHandle connection(WinHttpConnect(session, host.c_str(), url.nPort, 0));
   if (!connection)
     return std::nullopt;
   WinHttpHandle http_request(WinHttpOpenRequest(
-      connection, L"POST", L"/v1/systemone", nullptr, WINHTTP_NO_REFERER,
+      connection, L"POST", path.c_str(), nullptr, WINHTTP_NO_REFERER,
       WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
   if (!http_request)
+    return std::nullopt;
+  // Never forward the bearer credential to a redirected destination.
+  DWORD redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+  if (!WinHttpSetOption(http_request, WINHTTP_OPTION_REDIRECT_POLICY,
+                        &redirect_policy, sizeof(redirect_policy)))
     return std::nullopt;
 
   const std::wstring headers = L"Authorization: Bearer " + u8tow(api_key) +
@@ -197,6 +234,34 @@ std::optional<JevState::Result> AskJev(const std::string& api_key,
         !read)
       return std::nullopt;
     response.resize(offset + read);
+  }
+  // Explicit local opt-in: log structured decision fields, never headers or input.
+  if (GetEnvironmentUtf8(L"WEASEL_JEV_LOG_DECISIONS") == "1") {
+    try {
+      boost::property_tree::ptree parsed;
+      std::istringstream input(response);
+      boost::property_tree::read_json(input, parsed);
+      boost::property_tree::ptree summary;
+      summary.put("event", "decision_response");
+      if (GetEnvironmentUtf8(L"WEASEL_JEV_LOG_CANDIDATES") == "1") {
+        boost::property_tree::ptree choices;
+        for (const auto& choice : request.choices) {
+          choices.put(boost::property_tree::ptree::path_type(choice.key, '/'),
+                      choice.text);
+        }
+        summary.add_child("candidates", choices);
+      }
+      summary.put("choice", parsed.get<std::string>("answers.intent.choice", ""));
+      if (auto confidence = parsed.get_optional<double>("answers.intent.confidence"))
+        summary.put("confidence", *confidence);
+      if (auto probabilities = parsed.get_child_optional("answers.intent.probabilities"))
+        summary.add_child("probabilities", *probabilities);
+      std::ostringstream output;
+      boost::property_tree::write_json(output, summary, false);
+      JevDiagnostic(output.str());
+    } catch (const std::exception&) {
+      JevDiagnostic("decision_response logging_parse_failed");
+    }
   }
   return weasel::jev::ParseDecision(request, response);
 }
@@ -709,6 +774,9 @@ void RimeWithWeaselHandler::_StartJev() {
   const std::string api_key = GetEnvironmentUtf8(L"TYPESAFE_API_KEY");
   const auto allowed_apps =
       ParseAllowedApps(GetEnvironmentUtf8(L"WEASEL_JEV_APPS"));
+  JevDiagnostic(std::string("startup enabled=") + enabled +
+      " credential_present=" + (api_key.empty() ? "0" : "1") +
+      " allowed_apps=" + std::to_string(allowed_apps.size()));
   if ((enabled != "1" && enabled != "true") || api_key.empty() ||
       allowed_apps.empty()) {
     return;
@@ -736,7 +804,11 @@ void RimeWithWeaselHandler::_StartJev() {
         state->request.reset();
       }
 
+      LOG(INFO) << "Jev request started; candidate_count=" << request.candidates.size();
+      JevDiagnostic("request_started candidates=" + std::to_string(request.candidates.size()));
       auto result = AskJev(state->api_key, request);
+      JevDiagnostic(std::string("request_completed valid=") + (result ? "1" : "0"));
+      LOG(INFO) << "Jev request completed; valid_decision=" << bool(result);
       if (result) {
         std::lock_guard<std::mutex> lock(state->mutex);
         if (!state->stopping && request.generation == state->generation)
@@ -774,6 +846,7 @@ void RimeWithWeaselHandler::_ScheduleJev(WeaselSessionId ipc_id,
   SessionStatus& status = get_session_status(ipc_id);
   if (m_jev->allowed_apps.find(status.client_app) ==
       m_jev->allowed_apps.end()) {
+    JevDiagnostic("schedule_skipped app_not_allowed");
     return;
   }
 
@@ -812,11 +885,15 @@ void RimeWithWeaselHandler::_ScheduleJev(WeaselSessionId ipc_id,
 bool RimeWithWeaselHandler::_ApplyJev(WeaselSessionId ipc_id) {
   if (!m_jev)
     return false;
+  JevDiagnostic("apply_attempt");
   std::optional<JevState::Result> result;
   {
     std::lock_guard<std::mutex> lock(m_jev->mutex);
-    if (!m_jev->result || m_jev->result->request.session != ipc_id)
+    if (!m_jev->result || m_jev->result->request.session != ipc_id) {
+      JevDiagnostic(std::string("apply_unavailable reason=") +
+          (!m_jev->result ? "no_result" : "session_mismatch"));
       return false;
+    }
     result = std::move(m_jev->result);
     m_jev->result.reset();
   }
@@ -838,6 +915,9 @@ bool RimeWithWeaselHandler::_ApplyJev(WeaselSessionId ipc_id) {
       raw_input ? raw_input
                 : (ctx.composition.preedit ? ctx.composition.preedit : ""),
       candidates);
+  JevDiagnostic("apply_check matches=" + std::to_string(matches) +
+      " probability=" + std::to_string(result->probability) +
+      " input_matches=" + std::to_string(result->request.input == (raw_input ? raw_input : "")));
   bool committed_raw_input = false;
   if (matches) {
     SessionStatus& status = get_session_status(ipc_id);
@@ -848,7 +928,8 @@ bool RimeWithWeaselHandler::_ApplyJev(WeaselSessionId ipc_id) {
     } else {
       const size_t top = result->selected.candidate_index;
       rime_api->highlight_candidate_on_current_page(session_id, top);
-      DLOG(INFO) << "Jev ranked candidate " << top << " first with probability "
+      JevDiagnostic("candidate_applied index=" + std::to_string(top));
+      LOG(INFO) << "Jev ranked candidate " << top << " first with probability "
                  << result->probability;
     }
   }
