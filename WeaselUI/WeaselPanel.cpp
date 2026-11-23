@@ -1156,8 +1156,8 @@ void FillJevStar(Gdiplus::Graphics& g,
   for (int i = 0; i < 10; ++i) {
     const float radius = (i % 2) ? inner : r;
     const float angle = -1.5707963f + i * 0.6283185f;
-    points[i] = Gdiplus::PointF(cx + radius * cosf(angle),
-                                cy + radius * sinf(angle));
+    points[i] =
+        Gdiplus::PointF(cx + radius * cosf(angle), cy + radius * sinf(angle));
   }
   g.FillPolygon(&brush, points, 10);
 }
@@ -1221,9 +1221,9 @@ void WeaselPanel::_DrawJevIndicators(CDCHandle& dc) {
         if (m_istorepos)
           rc.OffsetRect(0, m_offsetys[index]);
         const bool hilited = index == m_ctx.cinfo.highlighted;
-        Gdiplus::SolidBrush brush(JevColor(
-            hilited ? m_style.hilited_label_text_color
-                    : m_style.label_text_color));
+        Gdiplus::SolidBrush brush(
+            JevColor(hilited ? m_style.hilited_label_text_color
+                             : m_style.label_text_color));
         const float r = size / 2.0f;
         FillJevStar(g, brush, rc.right - r - 1, rc.top + r + 1, r);
       } else {
