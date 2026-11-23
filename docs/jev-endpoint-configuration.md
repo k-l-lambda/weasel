@@ -9,6 +9,8 @@ The Jev client accepts two optional environment variables:
 
 The existing `TYPESAFE_API_KEY` supplies the bearer credential. `WEASEL_JEV_ENABLED` and the mandatory application allow-list `WEASEL_JEV_APPS` retain their existing behavior. Restart the server after changing its environment.
 
+`WEASEL_JEV_APPS` is a comma- or semicolon-separated list of executable names (case-insensitive). `*` enables every application, and `!name.exe` excludes one application even when `*` is present, for example `*, !keepass.exe`. A list that contains only exclusions enables nothing.
+
 Custom endpoints must use HTTPS, must not embed a username or password, and must not contain a query or fragment. HTTP redirects are rejected so the bearer credential cannot be forwarded to a different destination. TLS certificate verification remains enabled.
 
 The service must accept the existing `state` and `questions.intent` choice request and return `answers.intent` with a declared choice and valid probabilities. Canonicalized response model names do not affect choice validation.
