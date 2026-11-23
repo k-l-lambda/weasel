@@ -104,6 +104,15 @@ std::set<std::string> ParseAllowedApps(const std::string& value) {
   return apps;
 }
 
+// "*" allows every application; "!name.exe" excludes one and always wins.
+// An entry list with only exclusions allows nothing.
+bool IsJevAppAllowed(const std::set<std::string>& apps,
+                     const std::string& app) {
+  if (app.empty() || apps.count("!" + app))
+    return false;
+  return apps.count("*") || apps.count(app);
+}
+
 void AppendSignaturePart(std::string& signature, const std::string& value) {
   signature.append(std::to_string(value.size())).append(":").append(value);
 }
@@ -770,6 +779,11 @@ void RimeWithWeaselHandler::_StartJev() {
 #ifndef NDEBUG
   const auto app_check = ParseAllowedApps(" Notepad.exe; winword.exe ");
   assert(app_check.count("notepad.exe") && app_check.count("winword.exe"));
+  const auto wildcard_check = ParseAllowedApps("*, !KeePass.exe");
+  assert(IsJevAppAllowed(wildcard_check, "notepad.exe") &&
+         !IsJevAppAllowed(wildcard_check, "keepass.exe") &&
+         !IsJevAppAllowed(wildcard_check, "") &&
+         !IsJevAppAllowed(ParseAllowedApps("!a.exe"), "b.exe"));
   JevState::Request response_check;
   response_check.input = "hanzi";
   response_check.candidates = {"\xe6\xb1\x89\xe5\xad\x90",
@@ -868,8 +882,7 @@ void RimeWithWeaselHandler::_ScheduleJev(WeaselSessionId ipc_id,
   }
 
   SessionStatus& status = get_session_status(ipc_id);
-  if (m_jev->allowed_apps.find(status.client_app) ==
-      m_jev->allowed_apps.end()) {
+  if (!IsJevAppAllowed(m_jev->allowed_apps, status.client_app)) {
     JevDiagnostic("schedule_skipped app_not_allowed");
     return;
   }
