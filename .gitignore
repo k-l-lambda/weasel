@@ -31,6 +31,8 @@ compile_commands.json
 /include/glog
 /include/rime*.h
 /ipch
+/x64/
+/test/TestResponseParser/x64/
 env.bat
 weasel.props
 *.log
