@@ -128,6 +128,34 @@ void test_jev_choices() {
   BOOST_TEST(choices[0].key == "candidate_0");
   BOOST_TEST(choices[3].key == "raw_input");
 
+  std::vector<std::string> pool;
+  for (size_t i = 0; i < 35; ++i)
+    pool.push_back("choice" + std::to_string(i));
+  const auto expanded = BuildChoices(pool, "raw");
+  BOOST_TEST_EQ(kCandidateLimit + 1, expanded.size());
+  BOOST_TEST(expanded[29].key == "candidate_29");
+  BOOST_TEST_EQ(29, expanded[29].candidate_index);
+  RequestSnapshot expanded_request;
+  expanded_request.session = 42;
+  expanded_request.input = "raw";
+  expanded_request.candidates.assign(pool.begin(),
+                                     pool.begin() + kCandidateLimit);
+  expanded_request.choices = BuildChoices(expanded_request.candidates, "raw");
+  const auto expanded_decision = ParseDecision(
+      expanded_request,
+      R"({"answers":{"intent":{"choice":"candidate_29","confidence":0.95}}})");
+  BOOST_TEST(expanded_decision.has_value());
+  if (expanded_decision) {
+    BOOST_TEST_EQ(29, expanded_decision->selected.candidate_index);
+    BOOST_TEST(MatchesSnapshot(*expanded_decision, 42, "raw", pool));
+    auto changed_pool = pool;
+    changed_pool[29] = "changed";
+    BOOST_TEST(!MatchesSnapshot(*expanded_decision, 42, "raw", changed_pool));
+    BOOST_TEST(!MatchesSnapshot(
+        *expanded_decision, 42, "raw",
+        std::vector<std::string>(pool.begin(), pool.begin() + 10)));
+  }
+
   const auto limited = BuildChoices(candidates, "wozhidao", 2);
   BOOST_TEST_EQ(3, limited.size());
   BOOST_TEST(limited[1].key == "candidate_1");

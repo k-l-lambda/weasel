@@ -37,6 +37,18 @@ While a candidate menu is shown in an allowed application, the candidate window 
 | Hollow dot (panel corner) | The decision was below 0.60; the native order is kept. |
 | Cloud with a slash (panel corner) | The request failed or timed out; ordinary Rime behavior applies. |
 
-The recommendation only highlights a candidate. It never reorders candidates, and it does not move the highlight if the user has navigated (arrow keys, paging, mouse hover) since the request was made; the star still marks the recommendation. Space commits the raw input only when the menu is still on the first page and unchanged since the request.
+The recommendation highlights a candidate, switching to its page when needed. It never reorders candidates, and it does not move the highlight if the user has navigated (arrow keys, paging, mouse hover) since the request was made; the star still marks the recommendation. Space commits the raw input only when the menu is still on the first page and unchanged since the request.
 
 The server never pushes updates. While a request is in flight the text service polls the server about every 90 ms (`WEASEL_IPC_POLL_JEV`) for up to about 4 seconds, and redraws only when the visible state changed. Polling stops on focus loss and deactivation. Older text services ignore the indicator and keep the previous Space-time behavior.
+
+## Candidate pool
+
+Requests include the first 30 Rime candidates (or all available when fewer
+exist), gathered with the candidate iterator without navigating the visible
+menu. Choice construction and stale-result validation use this global pool.
+
+If the user has not navigated, global highlighting displays the recommended
+candidate's page without reordering candidates. Otherwise the user's page and
+highlight are preserved. The star is mapped to the recommended candidate only
+when its page is visible. Older librime builds without candidate iteration
+cannot schedule a decision; without global highlighting the highlight stays.

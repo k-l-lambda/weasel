@@ -8,6 +8,8 @@
 
 namespace weasel::jev {
 
+inline constexpr size_t kCandidateLimit = 30;
+
 enum class ChoiceKind { candidate, raw_input };
 
 struct Choice {
@@ -45,7 +47,7 @@ std::string UpdateContextWindow(const std::string& context,
                                 size_t maximum_codepoints = 128);
 std::vector<Choice> BuildChoices(const std::vector<std::string>& candidates,
                                  const std::string& input,
-                                 size_t limit = 10);
+                                 size_t limit = kCandidateLimit);
 std::optional<Decision> ParseDecision(const RequestSnapshot& request,
                                       const std::string& json);
 bool MatchesSnapshot(const Decision& decision,
